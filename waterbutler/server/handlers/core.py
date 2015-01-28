@@ -38,7 +38,8 @@ class BaseHandler(tornado.web.RequestHandler, SentryMixin):
     ACTION_MAP = {}
 
     def set_default_headers(self):
-        self.set_header('Access-Control-Allow-Origin', '*')
+        self.set_header('Access-Control-Allow-Origin', settings.CORS_ALLOW_ORIGIN)
+        self.set_header('Cache-control', 'no-store, no-cache, must-revalidate, max-age=0')
 
     def initialize(self):
         method = self.get_query_argument('method', None)
@@ -67,6 +68,7 @@ class BaseHandler(tornado.web.RequestHandler, SentryMixin):
         )
 
     def write_error(self, status_code, exc_info):
+        self.captureException(exc_info)
         etype, exc, _ = exc_info
         if issubclass(etype, exceptions.ProviderError):
             if exc.data:
@@ -75,8 +77,8 @@ class BaseHandler(tornado.web.RequestHandler, SentryMixin):
                 return
 
         self.finish({
-            "code": status_code,
-            "message": self._reason,
+            'code': status_code,
+            'message': self._reason,
         })
 
     def options(self):

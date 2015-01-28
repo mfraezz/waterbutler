@@ -31,7 +31,7 @@ class OSFStorageProvider(provider.BaseProvider):
 
     def __init__(self, auth, credentials, settings):
         super().__init__(auth, credentials, settings)
-        self.callback = settings.get('callback')
+        self.callback_url = settings.get('callback')
         self.metadata_url = settings.get('metadata')
         self.provider_name = settings['storage'].get('provider')
         self.parity_credentials = credentials.get('parity')
@@ -72,7 +72,7 @@ class OSFStorageProvider(provider.BaseProvider):
         # osf storage metadata will return a virtual path within the provider
         resp = yield from self.make_signed_request(
             'GET',
-            self.callback,
+            self.callback_url,
             params=kwargs,
             expects=(200, ),
             throws=exceptions.DownloadError,
@@ -81,7 +81,11 @@ class OSFStorageProvider(provider.BaseProvider):
         data = yield from resp.json()
         provider = self.make_provider(data['settings'])
         data['data']['path'] = '/' + data['data']['path']
-        return (yield from provider.download(**data['data']))
+        download_kwargs = {}
+        download_kwargs.update(kwargs)
+        download_kwargs.update(data['data'])
+        download_kwargs['displayName'] = kwargs.get('displayName') or kwargs['path']
+        return (yield from provider.download(**download_kwargs))
 
     @asyncio.coroutine
     def upload(self, stream, path, **kwargs):
@@ -99,18 +103,23 @@ class OSFStorageProvider(provider.BaseProvider):
         with open(pending_path, 'wb') as file_pointer:
             stream.add_writer('file', file_pointer)
             provider = self.make_provider(self.settings)
-            yield from provider.upload(stream, pending_name, **kwargs)
+            yield from provider.upload(stream, pending_name, check_created=False, fetch_metadata=False, **kwargs)
 
         complete_name = stream.writers['sha256'].hexdigest
         complete_path = os.path.join(settings.FILE_PATH_COMPLETE, complete_name)
 
         complete_name = OSFPath('/' + complete_name).path
 
-        metadata = yield from provider.move(
-            provider,
-            {'path': pending_name},
-            {'path': complete_name},
-        )
+        try:
+            metadata = yield from provider.metadata(complete_name)
+        except exceptions.ProviderError:
+            metadata = yield from provider.move(
+                provider,
+                {'path': pending_name},
+                {'path': complete_name},
+            )
+        else:
+            yield from provider.delete(pending_name)
 
         # Due to cross volume movement in unix we leverage shutil.move which properly handles this case.
         # http://bytes.com/topic/python/answers/41652-errno-18-invalid-cross-device-link-using-os-rename#post157964
@@ -118,7 +127,7 @@ class OSFStorageProvider(provider.BaseProvider):
 
         response = yield from self.make_signed_request(
             'POST',
-            self.callback,
+            self.callback_url,
             data=json.dumps({
                 'auth': self.auth,
                 'settings': self.settings['storage'],
@@ -152,7 +161,7 @@ class OSFStorageProvider(provider.BaseProvider):
             backup.main(
                 complete_path,
                 version_id,
-                self.callback,
+                self.callback_url,
                 self.archive_credentials,
                 self.archive_settings,
             )
@@ -174,7 +183,7 @@ class OSFStorageProvider(provider.BaseProvider):
 
         yield from self.make_signed_request(
             'DELETE',
-            self.callback,
+            self.callback_url,
             params=kwargs,
             expects=(200, )
         )

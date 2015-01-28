@@ -32,8 +32,8 @@ class GitHubProvider(provider.BaseProvider):
 
     def __init__(self, auth, credentials, settings):
         super().__init__(auth, credentials, settings)
-        self.name = self.auth['name']
-        self.email = self.auth['email']
+        self.name = self.auth.get('name', None)
+        self.email = self.auth.get('email', None)
         self.token = self.credentials['token']
         self.owner = self.settings['owner']
         self.repo = self.settings['repo']
@@ -82,10 +82,13 @@ class GitHubProvider(provider.BaseProvider):
     def upload(self, stream, path, message=None, branch=None, **kwargs):
         path = GitHubPath(path)
 
+        assert self.name is not None
+        assert self.email is not None
+
         content = yield from stream.read()
         content = base64.b64encode(content)
         content = content.decode('utf-8')
-        message = message or 'File uploaded on behalf of WaterButler'
+        message = message or settings.UPLOAD_FILE_MESSAGE
 
         data = {
             'path': path.path,
@@ -105,10 +108,14 @@ class GitHubProvider(provider.BaseProvider):
         if existing:
             data['sha'] = existing['extra']['fileSha']
 
+        # JSON encode the data before making the request and release the content variable to avoid
+        # unnecessary memory consumption.
+        data = json.dumps(data)
+        del content
         resp = yield from self.make_request(
             'PUT',
             self.build_repo_url('contents', path.path),
-            data=json.dumps(data),
+            data=data,
             expects=(200, 201),
             throws=exceptions.UploadError,
         )
@@ -118,6 +125,9 @@ class GitHubProvider(provider.BaseProvider):
     @asyncio.coroutine
     def delete(self, path, sha=None, message=None, branch=None, **kwargs):
         path = GitHubPath(path)
+
+        assert self.name is not None
+        assert self.email is not None
 
         if path.is_dir:
             yield from self._delete_folder(path, message, branch, **kwargs)
@@ -159,7 +169,7 @@ class GitHubProvider(provider.BaseProvider):
         if not sha:
             raise exceptions.MetadataError('A sha is required for deleting')
 
-        message = message or 'File deleted on behalf of WaterButler'
+        message = message or settings.DELETE_FILE_MESSAGE
         data = {
             'message': message,
             'sha': sha,
@@ -245,13 +255,14 @@ class GitHubProvider(provider.BaseProvider):
                 tree_sha = tree_data['sha']
 
         # Create a new commit which references our top most tree change.
-        message = message or 'Folder deleted on behalf of WaterButler'
+        message = message or settings.DELETE_FOLDER_MESSAGE
         commit_resp = yield from self.make_request(
             'POST',
             self.build_repo_url('git', 'commits'),
             headers={'Content-Type': 'application/json'},
             data=json.dumps({
                 'message': message,
+                'committer': self.committer,
                 'tree': tree_sha,
                 'parents': [
                     old_commit_sha,

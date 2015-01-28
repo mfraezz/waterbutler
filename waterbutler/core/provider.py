@@ -1,16 +1,12 @@
 import os
 import abc
 import asyncio
-import logging
 import itertools
 
 import furl
 import aiohttp
 
 from waterbutler.core import exceptions
-
-
-logger = logging.getLogger(__name__)
 
 
 def build_url(base, *segments, **query):
